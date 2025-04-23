@@ -41,7 +41,7 @@
     "timestamp": 1678886400,
     "ttl": 300,
     "signature": "OptionalBase64EncodedSignature==",
-    "content_type": "Text", // or "Image", "KeyPackage", "Other"
+    "content_type": "Text", // Or "Image", "KeyPackage", "Other"
     "size_bytes": 12345
   }
 }

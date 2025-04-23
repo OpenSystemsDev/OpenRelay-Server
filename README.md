@@ -54,10 +54,10 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     *   **Background Cleanup:** A background service periodically scans and removes expired queued messages, cleans up resources associated with disconnected or timed-out client connections, so the server does not retain any data longer than what you set it for.
 
 ## Reponses
-See [RESPONSES.md](//RESPONSES.md)
+See [RESPONSES.md](/RESPONSES.md)
 
 ## Devlog
-See [DEVLOG.md](//DEVLOG.md)
+See [DEVLOG.md](/DEVLOG.md)
 
 ## Self-hosting
 It is recommended to self-host the server, as it is a free service and I cannot guarantee uptime or availability.
