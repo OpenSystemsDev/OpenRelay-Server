@@ -3,26 +3,6 @@
 version = 4
 
 [[package]]
-name = "OpenRelay_Server"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "dashmap",
- "futures-util",
- "rand 0.9.1",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "warp",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -902,6 +882,26 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+
+[[package]]
+name = "openrelay-server"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "dashmap",
+ "futures-util",
+ "rand 0.9.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "warp",
+]
 
 [[package]]
 name = "overload"

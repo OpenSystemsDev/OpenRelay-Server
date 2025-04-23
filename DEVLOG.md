@@ -17,7 +17,6 @@ This log tracks the development progress, major changes, decisions, and bug fixe
                 Having a point-based system allows for more flexibility. The user may require to send one large text / image. Via this method, it will be allowed (of course as long as its smaller than the point limit), at the expense of them being rate limited for the remaining minute. This way, users can send multiple small messages or a singular large message, depending on their needs.  
                 The 60 messages per minute is necessary to prevent users from flooding the server with small messages.  
                 Handling limits over different file types is easier now. Dont need to explicitly set max sizes for each file type to ensure it stays within feasible limits.
-
 *   **Added:**  `Global monthly bandwidth tracking` to stay within oracle cloud free tier limits (10tb). If usage nears it, the server starts rejecting every request to ensure 
                 that I dont exceed the limit.
 *   **Documented:**  Created `README.md`

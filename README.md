@@ -22,7 +22,8 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     the free limits, I must adhere to the 10tb / month network limit. The server tracks the amount of data sent and received so far, and if it exceeds the acceptable set amount it begins rejecting every request, ensuring that I do not exceed the limit. You may edit the `monthly_limit` and `warning_threshold` in `types.rs` to change the limits, or remove them, if you are self-hosting the server.
 
 ## Security Measures
-1.  **Device-to-Device Authentication and Trust:** Although the server facilitates the exchange, trust is directly established between the devices, and the server has no knowledge. Here is how it works
+1.  **Device-to-Device Authentication and Trust:** Although the server facilitates the exchange, trust is directly established between the devices, and the server has no 
+    knowledge. Here is how it works
 -  **Key Generation:** When a new device connects to the OpenRelay server, it generates a unique **public / private key pair**. The private key **never** leaves the device.
 -  **First Contact and Exchange of Public Keys:**
     *   When Device A (say) wants to connect to Device B (say) for the first time (or the other way around), they need each other's public keys. They exchange their public keys using the server.
@@ -46,6 +47,11 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     *   Device B uses Device A's **public key** (obtained in the initial `AuthRequest`) to verify the signature.
     *   If the signature is valid, Device B now cryptographically trusts Device A.
 -  **Mutual Trust Established:** Both devices have now verified each other's identity by proving they hold the correct private keys.
+2.  **Privacy-Preserving Rate Limiting:** Rate limits (both requests per minute and data volume points) are enforced based on the **temporary WebSocket connection session**, 
+    identified by a unique ID generated *for that session only*. The server **does not** use the client's IP address or any persistent hardware / device identifier for rate limiting.
+3.  **Ephemeral Data Handling (TTL & Cleanup):**
+    *   **Message Time-To-Live (TTL):** Messages queued for offline recipients have a TTL set by the sender. If a message is not delivered before its TTL expires, it is automatically discarded by the server.
+    *   **Background Cleanup:** A background service periodically scans and removes expired queued messages, cleans up resources associated with disconnected or timed-out client connections, so the server does not retain any data longer than what you set it for.
 
 ## Reponses
 See [RESPONSES.md](/blob/main/RESPONSES.md)
