@@ -2,7 +2,7 @@
 OpenRelay-Server is the backend relay server that allows OpenRelay to sync data across networks.
 
 ## Features
-1.  **Zero-knowledge Architechture:** The server is designed to have zero knowledge of any of the data being 
+1.  **Zero-knowledge Architecture:** The server is designed to have zero knowledge of any of the data being 
     sent or received.
     *   Everything relayed is end-to-end encrypted by the client before being sent.
     *   Server operators have no ability to access, decrypt or store any message content during or after transmission.
@@ -26,15 +26,15 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     knowledge. Here is how it works
 -  **Key Generation:** When a new device connects to the OpenRelay server, it generates a unique **public / private key pair**. The private key **never** leaves the device.
 -  **First Contact and Exchange of Public Keys:**
-    *   When Device A (say) wants to connect to Device B (say) for the first time (or the other way around), they need each other's public keys. They exchange their public keys using the server.
+    *   When device A wants to pair with device B, they exchange their public keys securely via the server.
 -  **Challenge Initiation (A challenges B):**
     *   Device A generates a random, unique **challenge**.
-    *   Device A sends an `AuthRequest` message to Device B (via the relay server) containing its own `device_id`, its `public_key`, and the `challenge`.
+    *   Device A initiates the process by sending an AuthRequest message through the relay server containing its `device_id`, `public_key` and the randomly generated `challenge`.
 -  **Response Generation (B responds to A):**
     *   Device B receives the `AuthRequest`.
-    *   Device B uses its own **private key** to sign the `challenge` it received from Device A. This signature proves Device B has the correct private key corresponding to its public key.
+    *   Device B uses its **private key** to sign the `challenge` it received from Device A. The signature proves that Device B holds the proper private key which matches its public key.
     *   Device B also generates its own unique `challenge` for Device A.
-    *   Device B sends an `AuthResponse` message back to Device A (via the server) containing its `device_id`, the **signed response** to A's challenge, and its **new challenge** for A.
+    *   Device B sends an `AuthResponse` message back to the server, which is sent to Device A containing its `device_id`, the `signed response` and a new `challenge`.
 -  **Verification (A verifies B):**
     *   Device A receives the `AuthResponse`.
     *   Device A uses Device B's **public key** (which it obtained earlier) to verify the **signed response**.
@@ -44,11 +44,9 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     *   Device A sends an `AuthVerify` message to Device B (via the server) containing its `device_id` and the **signed response** to B's challenge.
 -  **Final Verification (B verifies A):**
     *   Device B receives the `AuthVerify`.
-    *   Device B uses Device A's **public key** (obtained in the initial `AuthRequest`) to verify the signature.
-    *   If the signature is valid, Device B now cryptographically trusts Device A.
+    *   Device B verifies the signature using Device A's **public key** (obtained from the `AuthRequest` message earlier). If it's valid, Device B has now established a cryptographic trust with Device A.
 -  **Mutual Trust Established:** Both devices have now verified each other's identity by proving they hold the correct private keys.
-2.  **Privacy-Preserving Rate Limiting:** Rate limits (both requests per minute and data volume points) are enforced based on the **temporary WebSocket connection session**, 
-    identified by a unique ID generated *for that session only*. The server **does not** use the client's IP address or any persistent hardware / device identifier for rate limiting.
+2.  **Privacy-Preserving Rate Limiting:** Rate limits (both requests per minute and data points) are enforced based on the **hardware ID hash** of the user's system provided during registration. This ensures that connections persist across client restarts, and connection cycling, reconnections cannot be used to abuse the server. The hardware ID is a one-way hash obtained from the CPU, motherboard, BIOS, and system identifiers that cannot be reversed to identify the actual hardware information.
 3.  **Ephemeral Data Handling (TTL & Cleanup):**
     *   **Message Time-To-Live (TTL):** Messages queued for offline recipients have a TTL set by the sender. If a message is not delivered before its TTL expires, it is automatically discarded by the server.
     *   **Background Cleanup:** A background service periodically scans and removes expired queued messages, cleans up resources associated with disconnected or timed-out client connections, so the server does not retain any data longer than what you set it for.

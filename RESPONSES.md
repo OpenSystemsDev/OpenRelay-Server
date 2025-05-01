@@ -3,11 +3,14 @@
 **1. Register Device**
 
 *   **Direction:** Client -> Server
-*   **Purpose:** Request a unique ID for this connection session.
+*   **Purpose:** Request a unique ID for this connection session and provide hardware ID hash.
 
 ```json
 {
-  "type": "Register"
+  "type": "Register",
+  "payload": {
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0"
+  }
 }
 ```
 
@@ -41,6 +44,7 @@
     "timestamp": 1678886400,
     "ttl": 300,
     "signature": "OptionalBase64EncodedSignature==",
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0",
     "content_type": "Text", // Or "Image", "KeyPackage", "Other"
     "size_bytes": 12345
   }
@@ -63,6 +67,7 @@
     "timestamp": 1678886400,
     "ttl": 300,
     "signature": "OptionalBase64EncodedSignature==",
+    "hardware_id": "1E0D2B3C4A5F8E9D6B0C1F2A3D5E6C8E3917DEF0B65C6A143F7E209D8CB7A5",
     "content_type": "Text",
     "size_bytes": 12345
   }
@@ -137,7 +142,8 @@
   "payload": {
     "device_id": "d8f8a9b0-f6e1-4a2b-8d7c-1e9f0a1b2c3d", // Sender's ID
     "public_key": "Base64PublicKey==",
-    "challenge": "RandomChallengeString"
+    "challenge": "RandomChallengeString",
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0"
   }
 }
 ```
@@ -153,7 +159,8 @@
   "payload": {
     "device_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef", // Responder's ID
     "challenge_response": "Base64SignatureOfSendersChallenge==",
-    "challenge": "NewRandomChallengeStringForSender"
+    "challenge": "NewRandomChallengeStringForSender",
+    "hardware_id": "1E0D2B3C4A5F8E9D6B0C1F2A3D5E6C8E3917DEF0B65C6A143F7E209D8CB7A5"
   }
 }
 ```
@@ -168,7 +175,8 @@
   "type": "AuthVerify",
   "payload": {
     "device_id": "d8f8a9b0-f6e1-4a2b-8d7c-1e9f0a1b2c3d", // Original Sender's ID
-    "challenge_response": "Base64SignatureOfRespondersChallenge=="
+    "challenge_response": "Base64SignatureOfRespondersChallenge==",
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0"
   }
 }
 ```
@@ -183,7 +191,8 @@
   "type": "AuthSuccess",
   "payload": {
     "device_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef", // ID of the device being confirmed as trusted
-    "trusted": true
+    "trusted": true,
+    "hardware_id": "1E0D2B3C4A5F8E9D6B0C1F2A3D5E6C8E3917DEF0B65C6A143F7E209D8CB7A5"
   }
 }
 ```
@@ -206,7 +215,8 @@
     "sender_id": "d8f8a9b0-f6e1-4a2b-8d7c-1e9f0a1b2c3d",
     "recipient_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
     "encrypted_key_package": "Base64EncryptedKeyData==",
-    "key_id": 1678886401 // Example: Timestamp or sequence number
+    "key_id": 1678886401, // Example: Timestamp or sequence number
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0"
   }
 }
 ```
@@ -223,7 +233,8 @@
     "sender_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef", // ID of device sending the Ack
     "recipient_id": "d8f8a9b0-f6e1-4a2b-8d7c-1e9f0a1b2c3d", // ID of original key sender
     "key_id": 1678886401,
-    "success": true // Or false if processing failed
+    "success": true, // Or false if processing failed
+    "hardware_id": "1E0D2B3C4A5F8E9D6B0C1F2A3D5E6C8E3917DEF0B65C6A143F7E209D8CB7A5"
   }
 }
 ```
@@ -242,7 +253,8 @@
   "type": "Status",
   "payload": {
     "device_id": "d8f8a9b0-f6e1-4a2b-8d7c-1e9f0a1b2c3d",
-    "status": "Online" // Or "Away", "Offline"
+    "status": "Online", // Or "Away", "Offline"
+    "hardware_id": "5A7BC8D902E7F341A6C56B0FED7193E8C6E5D3A42F1C0B76D9E8F5A4C3B2D1E0"
   }
 }
 ```

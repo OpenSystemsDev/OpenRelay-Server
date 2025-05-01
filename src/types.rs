@@ -15,6 +15,21 @@ pub type MessageQueues = DashMap<String, Vec<QueuedMessage>>;
 // Store last activity time for each device
 pub type LastActive = DashMap<String, Instant>;
 
+// Store hardware ID to device ID mappings
+pub type HardwareIdMap = DashMap<String, String>;
+
+// Store device ID to hardware ID mappings (reverse lookup)
+pub type DeviceIdToHwIdMap = DashMap<String, String>;
+
+// Store rate limits by hardware ID
+pub type HardwareRateLimits = DashMap<String, RateLimit>;
+
+// Store active connections by device ID
+pub type ActiveConnections = DashMap<String, String>; // device_id -> connection_id
+
+// Store authorized device pairs (hwid_1 -> Map<hwid_2, bool>)
+pub type AuthorizedDevices = DashMap<String, DashMap<String, bool>>;
+
 // Create a struct to track monthly bandwidth usage
 pub struct BandwidthTracker {
     // Current month's data transfer in bytes
@@ -191,7 +206,7 @@ impl BandwidthTracker {
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketMessage {
     // Basic communication
-    Register,
+    Register { hardware_id: String },
     RegisterResponse { device_id: String },
     Send(RelayMessage),
     Receive(RelayMessage),
@@ -200,27 +215,31 @@ pub enum WebSocketMessage {
     Pong,
     Error { message: String, code: Option<u16> },
     
-    // Authentication
+    // Authentication with challenge-response
     AuthRequest {
         device_id: String,
         public_key: String,      // Base64 encoded public key
         challenge: String,       // Random challenge for verification
+        hardware_id: String,     // Hardware ID hash
     },
 
     AuthResponse {
         device_id: String,
         challenge_response: String,  // Signed challenge
         challenge: String,           // New challenge for requester to sign
+        hardware_id: String,         // Hardware ID hash
     },
 
     AuthVerify {
         device_id: String,
         challenge_response: String,  // Signed challenge
+        hardware_id: String,         // Hardware ID hash
     },
 
     AuthSuccess {
         device_id: String,
         trusted: bool,               // Whether device is trusted
+        hardware_id: String,         // Hardware ID hash of the trusted device
     },
 
     KeyRotationUpdate {
@@ -228,6 +247,7 @@ pub enum WebSocketMessage {
         recipient_id: String,
         encrypted_key_package: String,  // Encrypted package containing new keys
         key_id: u64,                    // ID of the new key for tracking
+        hardware_id: String,            // Hardware ID hash of the sender
     },
 
     KeyRotationAck {
@@ -235,11 +255,13 @@ pub enum WebSocketMessage {
         recipient_id: String,
         key_id: u64,                    // ID of the acknowledged key
         success: bool,                  // Whether it was successful
+        hardware_id: String,            // Hardware ID hash of the sender
     },
 
     Status {
         device_id: String,
         status: DeviceStatus,
+        hardware_id: String,            // Hardware ID hash
     },
 }
 
@@ -255,6 +277,7 @@ pub struct RelayMessage {
     
     // Authentication
     pub signature: Option<String>,   // Digital signature of the message
+    pub hardware_id: String,         // Hardware ID hash of the sender
     
     // Limit enforcement
     pub content_type: ContentType,   // Type of content for rate limiting
@@ -265,6 +288,7 @@ pub struct RelayMessage {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DeviceIdentity {
     pub device_id: String,
+    pub hardware_id: String,         // Hardware ID hash
     pub public_key: String,
     pub name: Option<String>,        // Optional device name
     pub verified: bool,              // Verified of not

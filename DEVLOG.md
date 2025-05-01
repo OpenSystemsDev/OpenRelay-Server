@@ -25,3 +25,11 @@ This log tracks the development progress, major changes, decisions, and bug fixe
                 rate limit. In favour of privacy, I have decided to take this risk, and analyse usage patterns to see if this is a problem. If it is, I will implement a more complex rate limiting system. Maybe client side prevention mechanisms.
                 I should probably address this tomorrow.
 ---
+
+## 2025-04-25
+
+**Time:** 11:32:13 UTC | **Author:** Awe03  
+
+### Updated Docs, Use a hash of the user's hardware IDs for identification and enforcement of rate limiting, Proper implementation of the pairing system
+* **Decision:** Using a hash of the user's hardware IDs (CPU, Memory, Disk and the Hardware ID) instead of a temporary WebSocket id ensures that the user cannot bypass rate limits by reconnecting, and allows persistent pairing over client restarts.
+* **Updated:** README.md now explains what the user's hardware has is used for, and how it is used.
