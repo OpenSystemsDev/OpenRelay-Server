@@ -178,7 +178,9 @@ fn check_auth_exempt_message(encrypted_data: &str) -> Result<bool, Box<dyn std::
             "AuthResponse", 
             "AuthVerify", 
             "AuthSuccess",
-            "AuthChallenge"
+            "AuthChallenge",
+            "ClipboardUpdate",  // Add clipboard updates as an exempt type
+            "ClipboardChunk"    // Add chunks as well
         ];
         
         return Ok(exempt_types.contains(&msg_type));
