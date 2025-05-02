@@ -356,6 +356,8 @@ async fn handle_websocket(
                             message: "Invalid message format".to_string(),
                             code: Some(400),
                         };
+                        // log e
+                        error!("Error: {}", e);
                         let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
                         continue;
                     }
