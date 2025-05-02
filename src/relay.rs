@@ -3,6 +3,7 @@ use crate::types::{
     MessageQueues, LastActive, WebSocketMessage, HardwareIdMap, 
     HardwareRateLimits, DeviceIdToHwIdMap, ActiveConnections, AuthorizedDevices 
 };
+use base64;
 use dashmap::DashMap;
 use futures_util::{ SinkExt, StreamExt };
 use std::{ net::SocketAddr, sync::Arc, time::{Duration, Instant} };
@@ -147,6 +148,45 @@ impl RelayServer {
         }
     }
 }
+
+fn check_auth_exempt_message(encrypted_data: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    // Try to decode the base64 data
+    let bytes = match base64::decode(encrypted_data) {
+        Ok(b) => b,
+        Err(_) => return Ok(false), // Not base64, not exempt
+    };
+    
+    // Try to parse as UTF-8 string
+    let data_str = match std::str::from_utf8(&bytes) {
+        Ok(s) => s,
+        Err(_) => return Ok(false), // Not UTF-8, not exempt
+    };
+    
+    // Try to parse as JSON
+    let json: serde_json::Value = match serde_json::from_str(data_str) {
+        Ok(j) => j,
+        Err(_) => return Ok(false), // Not JSON, not exempt
+    };
+    
+    // Check for "type" field
+    if let Some(msg_type) = json.get("type").and_then(|t| t.as_str()) {
+        // List of message types that are exempt from authorization check
+        let exempt_types = vec![
+            "PairingRequest", 
+            "PairingResponse",
+            "AuthRequest", 
+            "AuthResponse", 
+            "AuthVerify", 
+            "AuthSuccess",
+            "AuthChallenge"
+        ];
+        
+        return Ok(exempt_types.contains(&msg_type));
+    }
+    
+    Ok(false)
+}
+
 
 // Clean up inactive connections and expired messages
 fn start_cleanup_task(
@@ -401,34 +441,43 @@ async fn handle_websocket(
                             continue;
                         }
                         
-                        // Check if sender and recipient are paired/authorized
-                        let recipient_hw_id = match device_to_hwid_map.get(&relay_msg.recipient_id) {
-                            Some(hw_id) => hw_id.value().clone(),
-                            None => {
-                                // If recipient doesn't exist, we'll still try to queue the message
-                                // It might be registered later
-                                debug!("Recipient with ID {} not currently registered", relay_msg.recipient_id);
-                                String::new()
-                            }
+                        // Check message content to determine if it's a pairing or auth-related message
+                        let is_auth_message = match check_auth_exempt_message(&relay_msg.encrypted_data) {
+                            Ok(is_exempt) => is_exempt,
+                            Err(_) => false, // If we can't determine, assume it's not exempt
                         };
-                        
-                        if !recipient_hw_id.is_empty() {
-                            // Check if devices are authorized
-                            let authorized = match authorized_devices.get(&hardware_id) {
-                                Some(map) => map.contains_key(&recipient_hw_id),
-                                None => false
+                    
+                        // Check if sender and recipient are paired/authorized (skip for auth-related messages)
+                        if !is_auth_message {
+                            let recipient_hw_id = match device_to_hwid_map.get(&relay_msg.recipient_id) {
+                                Some(hw_id) => hw_id.value().clone(),
+                                None => {
+                                    // If recipient doesn't exist, we'll still try to queue the message
+                                    // It might be registered later
+                                    debug!("Recipient with ID {} not currently registered", relay_msg.recipient_id);
+                                    String::new()
+                                }
                             };
                             
-                            if !authorized {
-                                warn!("Unauthorized message from {} to {}", hardware_id, recipient_hw_id);
-                                let error_msg = WebSocketMessage::Error {
-                                    message: "Devices not paired".to_string(),
-                                    code: Some(403),
+                            if !recipient_hw_id.is_empty() {
+                                // Check if devices are authorized
+                                let authorized = match authorized_devices.get(&hardware_id) {
+                                    Some(map) => map.contains_key(&recipient_hw_id),
+                                    None => false
                                 };
-                                let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                continue;
+                                
+                                if !authorized {
+                                    warn!("Unauthorized message from {} to {}", hardware_id, recipient_hw_id);
+                                    let error_msg = WebSocketMessage::Error {
+                                        message: "Devices not paired".to_string(),
+                                        code: Some(403),
+                                    };
+                                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                                    continue;
+                                }
                             }
                         }
+                    
                         
                         // Check if hardware ID has enough points for this message size
                         if let Some(mut rate_limit) = hardware_rate_limits.get_mut(&hardware_id) {
