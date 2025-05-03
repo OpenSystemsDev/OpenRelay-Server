@@ -27,9 +27,6 @@ pub type HardwareRateLimits = DashMap<String, RateLimit>;
 // Store active connections by device ID
 pub type ActiveConnections = DashMap<String, String>; // device_id -> connection_id
 
-// Store authorized device pairs (hwid_1 -> Map<hwid_2, bool>)
-pub type AuthorizedDevices = DashMap<String, DashMap<String, bool>>;
-
 // Create a struct to track monthly bandwidth usage
 pub struct BandwidthTracker {
     // Current month's data transfer in bytes

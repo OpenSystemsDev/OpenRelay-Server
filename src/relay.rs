@@ -1,7 +1,7 @@
 use crate::types::{ 
     BandwidthTracker, DeviceStatus, QueuedMessage, RateLimit, 
     MessageQueues, LastActive, WebSocketMessage, HardwareIdMap, 
-    HardwareRateLimits, DeviceIdToHwIdMap, ActiveConnections, AuthorizedDevices 
+    HardwareRateLimits, DeviceIdToHwIdMap, ActiveConnections 
 };
 use base64;
 use dashmap::DashMap;
@@ -44,7 +44,6 @@ impl RelayServer {
         let hardware_id_map = Arc::new(HardwareIdMap::new());
         let device_to_hwid_map = Arc::new(DeviceIdToHwIdMap::new());
         let active_connections = Arc::new(ActiveConnections::new());
-        let authorized_devices = Arc::new(AuthorizedDevices::new());
 
         // Create filters to pass state to handlers
         // Clone Arcs here so the originals are not moved into the closures
@@ -56,7 +55,6 @@ impl RelayServer {
         let hardware_id_map_clone = hardware_id_map.clone();
         let device_to_hwid_map_clone = device_to_hwid_map.clone();
         let active_connections_clone = active_connections.clone();
-        let authorized_devices_clone = authorized_devices.clone();
 
         let connections_filter = warp::any().map(move || connections_clone.clone());
         let hardware_rate_limits_filter = warp::any().map(move || hardware_rate_limits_clone.clone());
@@ -66,7 +64,6 @@ impl RelayServer {
         let hardware_id_map_filter = warp::any().map(move || hardware_id_map_clone.clone());
         let device_to_hwid_map_filter = warp::any().map(move || device_to_hwid_map_clone.clone());
         let active_connections_filter = warp::any().map(move || active_connections_clone.clone());
-        let authorized_devices_filter = warp::any().map(move || authorized_devices_clone.clone());
 
         // Define WebSocket route
         let ws_route = warp::path("relay")
@@ -79,7 +76,6 @@ impl RelayServer {
             .and(hardware_id_map_filter.clone())
             .and(device_to_hwid_map_filter.clone())
             .and(active_connections_filter.clone())
-            .and(authorized_devices_filter.clone())
             .map(|ws: warp::ws::Ws, 
                  connections, 
                  hardware_rate_limits, 
@@ -88,8 +84,7 @@ impl RelayServer {
                  bandwidth_tracker,
                  hardware_id_map,
                  device_to_hwid_map,
-                 active_connections,
-                 authorized_devices| {
+                 active_connections| {
                 ws.on_upgrade(move |socket| {
                     handle_websocket(
                         socket, 
@@ -100,8 +95,7 @@ impl RelayServer {
                         bandwidth_tracker,
                         hardware_id_map,
                         device_to_hwid_map,
-                        active_connections,
-                        authorized_devices,
+                        active_connections
                     )
                 })
             });
@@ -288,7 +282,6 @@ async fn handle_websocket(
     hardware_id_map: Arc<HardwareIdMap>,
     device_to_hwid_map: Arc<DeviceIdToHwIdMap>,
     active_connections: Arc<ActiveConnections>,
-    authorized_devices: Arc<AuthorizedDevices>,
 ) {
     let (mut ws_tx, mut ws_rx) = ws.split();
 
@@ -450,38 +443,6 @@ async fn handle_websocket(
                             Ok(is_exempt) => is_exempt,
                             Err(_) => false, // If we can't determine, assume it's not exempt
                         };
-                    
-                        // Check if sender and recipient are paired/authorized (skip for auth-related messages)
-                        if !is_auth_message {
-                            let recipient_hw_id = match device_to_hwid_map.get(&relay_msg.recipient_id) {
-                                Some(hw_id) => hw_id.value().clone(),
-                                None => {
-                                    // If recipient doesn't exist, we'll still try to queue the message
-                                    // It might be registered later
-                                    debug!("Recipient with ID {} not currently registered", relay_msg.recipient_id);
-                                    String::new()
-                                }
-                            };
-                            
-                            if !recipient_hw_id.is_empty() {
-                                // Check if devices are authorized
-                                let authorized = match authorized_devices.get(&hardware_id) {
-                                    Some(map) => map.contains_key(&recipient_hw_id),
-                                    None => false
-                                };
-                                
-                                if !authorized {
-                                    warn!("Unauthorized message from {} to {}", hardware_id, recipient_hw_id);
-                                    let error_msg = WebSocketMessage::Error {
-                                        message: "Devices not paired".to_string(),
-                                        code: Some(403),
-                                    };
-                                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    continue;
-                                }
-                            }
-                        }
-                    
                         
                         // Check if hardware ID has enough points for this message size
                         if let Some(mut rate_limit) = hardware_rate_limits.get_mut(&hardware_id) {
@@ -842,25 +803,6 @@ async fn handle_websocket(
                             String::new()
                         };
                         
-                        // If trusted, update authorized devices
-                        if trusted {
-                            // Get hardware ID of the target device
-                            if let Some(trusted_hw_id) = device_to_hwid_map.get(&success_id) {
-                                // Add bidirectional trust
-                                authorized_devices
-                                    .entry(hardware_id.clone())
-                                    .or_insert_with(DashMap::new)
-                                    .insert(trusted_hw_id.value().clone(), true);
-                                    
-                                authorized_devices
-                                    .entry(trusted_hw_id.value().clone())
-                                    .or_insert_with(DashMap::new)
-                                    .insert(hardware_id.clone(), true);
-                                    
-                                info!("Devices paired: {} <-> {}", hardware_id, trusted_hw_id.value());
-                            }
-                        }
-                        
                         if !recipient_conn_id.is_empty() {
                             if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
                                 // Forward auth success
@@ -911,35 +853,7 @@ async fn handle_websocket(
                             let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
                             continue;
                         }
-                        
-                        // Verify sender is authorized to talk to recipient
-                        let recipient_hw_id = match device_to_hwid_map.get(&recipient_id) {
-                            Some(hw_id) => hw_id.value().clone(),
-                            None => {
-                                let error_msg = WebSocketMessage::Error {
-                                    message: "Recipient not found".to_string(),
-                                    code: Some(404),
-                                };
-                                let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                continue;
-                            }
-                        };
-                        
-                        let authorized = match authorized_devices.get(&hardware_id) {
-                            Some(map) => map.contains_key(&recipient_hw_id),
-                            None => false
-                        };
-                        
-                        if !authorized {
-                            warn!("Unauthorized key rotation from {} to {}", hardware_id, recipient_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Devices not paired".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                            continue;
-                        }
-                        
+
                         info!("Key rotation update from {} to {}", sender_id, recipient_id);
                         
                         // Find recipient's connection
