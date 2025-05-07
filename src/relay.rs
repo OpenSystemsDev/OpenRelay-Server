@@ -1,26 +1,30 @@
-use crate::types::{ 
-    BandwidthTracker, DeviceStatus, QueuedMessage, RateLimit, 
-    MessageQueues, LastActive, WebSocketMessage, HardwareIdMap, 
-    HardwareRateLimits, DeviceIdToHwIdMap, ActiveConnections 
+use crate::types::{
+    ActiveConnections, BandwidthTracker, DeviceStatus, HardwareRateLimits, LastActive,
+    MessageQueues, QueuedMessage, RateLimit, WebSocketMessage,
 };
-use base64;
 use dashmap::DashMap;
-use futures_util::{ SinkExt, StreamExt };
-use std::{ net::SocketAddr, sync::Arc, time::{Duration, Instant} };
-use tokio::{ sync::mpsc, time };
+use futures_util::{SinkExt, StreamExt};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{sync::mpsc, time};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{ debug, error, info, warn };
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use warp::{ ws::{Message, WebSocket}, Filter };
+use warp::{
+    Filter,
+    ws::{Message, WebSocket},
+};
 
-// Store active connections with their device IDs and message channels
+// Store active connections with their Hardware IDs and message channels
 // The server will use this to find the correct connection to send messages to
 type Connections = DashMap<String, mpsc::UnboundedSender<Message>>;
 
 pub struct RelayServer {
     addr: SocketAddr,
     connection_timeout: Duration,
-    queue_ttl: Duration,
     bandwidth_tracker: BandwidthTracker,
 }
 
@@ -29,7 +33,6 @@ impl RelayServer {
         Self {
             addr: addr.into(),
             connection_timeout: Duration::from_secs(30), // 30 second timeout
-            queue_ttl: Duration::from_secs(300),         // 5 minute TTL for queued messages
             bandwidth_tracker: BandwidthTracker::new("bandwidth_data.txt"),
         }
     }
@@ -41,8 +44,6 @@ impl RelayServer {
         let message_queues = Arc::new(MessageQueues::new());
         let last_active = Arc::new(LastActive::new());
         let bandwidth_tracker = Arc::new(self.bandwidth_tracker.clone());
-        let hardware_id_map = Arc::new(HardwareIdMap::new());
-        let device_to_hwid_map = Arc::new(DeviceIdToHwIdMap::new());
         let active_connections = Arc::new(ActiveConnections::new());
 
         // Create filters to pass state to handlers
@@ -52,17 +53,14 @@ impl RelayServer {
         let message_queues_clone = message_queues.clone();
         let last_active_clone = last_active.clone();
         let bandwidth_tracker_clone = bandwidth_tracker.clone();
-        let hardware_id_map_clone = hardware_id_map.clone();
-        let device_to_hwid_map_clone = device_to_hwid_map.clone();
         let active_connections_clone = active_connections.clone();
 
         let connections_filter = warp::any().map(move || connections_clone.clone());
-        let hardware_rate_limits_filter = warp::any().map(move || hardware_rate_limits_clone.clone());
+        let hardware_rate_limits_filter =
+            warp::any().map(move || hardware_rate_limits_clone.clone());
         let message_queues_filter = warp::any().map(move || message_queues_clone.clone());
         let last_active_filter = warp::any().map(move || last_active_clone.clone());
         let bandwidth_tracker_filter = warp::any().map(move || bandwidth_tracker_clone.clone());
-        let hardware_id_map_filter = warp::any().map(move || hardware_id_map_clone.clone());
-        let device_to_hwid_map_filter = warp::any().map(move || device_to_hwid_map_clone.clone());
         let active_connections_filter = warp::any().map(move || active_connections_clone.clone());
 
         // Define WebSocket route
@@ -73,32 +71,28 @@ impl RelayServer {
             .and(message_queues_filter.clone())
             .and(last_active_filter.clone())
             .and(bandwidth_tracker_filter.clone())
-            .and(hardware_id_map_filter.clone())
-            .and(device_to_hwid_map_filter.clone())
             .and(active_connections_filter.clone())
-            .map(|ws: warp::ws::Ws, 
-                 connections, 
-                 hardware_rate_limits, 
-                 message_queues, 
+            .map(
+                |ws: warp::ws::Ws,
+                 connections,
+                 hardware_rate_limits,
+                 message_queues,
                  last_active,
                  bandwidth_tracker,
-                 hardware_id_map,
-                 device_to_hwid_map,
                  active_connections| {
-                ws.on_upgrade(move |socket| {
-                    handle_websocket(
-                        socket, 
-                        connections, 
-                        hardware_rate_limits, 
-                        message_queues, 
-                        last_active,
-                        bandwidth_tracker,
-                        hardware_id_map,
-                        device_to_hwid_map,
-                        active_connections
-                    )
-                })
-            });
+                    ws.on_upgrade(move |socket| {
+                        handle_websocket(
+                            socket,
+                            connections,
+                            hardware_rate_limits,
+                            message_queues,
+                            last_active,
+                            bandwidth_tracker,
+                            active_connections,
+                        )
+                    })
+                },
+            );
 
         // If its working
         let health = warp::path("health").map(|| "OK");
@@ -107,10 +101,12 @@ impl RelayServer {
         let bandwidth_tracker_status = bandwidth_tracker.clone();
         let bandwidth_status = warp::path("bandwidth-status").map(move || {
             let (used, limit, percentage) = bandwidth_tracker_status.get_status();
-            format!("Bandwidth Usage: {:.2} TB / {:.2} TB ({:.2}%)", 
-                    used as f64 / 1_000_000_000_000.0,
-                    limit as f64 / 1_000_000_000_000.0,
-                    percentage)
+            format!(
+                "Bandwidth Usage: {:.2} TB / {:.2} TB ({:.2}%)",
+                used as f64 / 1_000_000_000_000.0,
+                limit as f64 / 1_000_000_000_000.0,
+                percentage
+            )
         });
 
         // Combine routes
@@ -121,8 +117,6 @@ impl RelayServer {
             connections.clone(),
             message_queues.clone(),
             last_active.clone(),
-            hardware_id_map.clone(),
-            device_to_hwid_map.clone(),
             active_connections.clone(),
             self.connection_timeout,
         );
@@ -143,109 +137,60 @@ impl RelayServer {
     }
 }
 
-fn check_auth_exempt_message(encrypted_data: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    // Try to decode the base64 data
-    let bytes = match base64::decode(encrypted_data) {
-        Ok(b) => b,
-        Err(_) => return Ok(false), // Not base64, not exempt
-    };
-    
-    // Try to parse as UTF-8 string
-    let data_str = match std::str::from_utf8(&bytes) {
-        Ok(s) => s,
-        Err(_) => return Ok(false), // Not UTF-8, not exempt
-    };
-    
-    // Try to parse as JSON
-    let json: serde_json::Value = match serde_json::from_str(data_str) {
-        Ok(j) => j,
-        Err(_) => return Ok(false), // Not JSON, not exempt
-    };
-    
-    // Check for "type" field
-    if let Some(msg_type) = json.get("type").and_then(|t| t.as_str()) {
-        // List of message types that are exempt from authorization check
-        let exempt_types = vec![
-            "PairingRequest", 
-            "PairingResponse",
-            "AuthRequest", 
-            "AuthResponse", 
-            "AuthVerify", 
-            "AuthSuccess",
-            "AuthChallenge",
-            "ClipboardUpdate",  // Add clipboard updates as an exempt type
-            "ClipboardChunk"    // Add chunks as well
-        ];
-        
-        return Ok(exempt_types.contains(&msg_type));
-    }
-    
-    Ok(false)
-}
-
-
 // Clean up inactive connections and expired messages
 fn start_cleanup_task(
     connections: Arc<Connections>,
     message_queues: Arc<MessageQueues>,
     last_active: Arc<LastActive>,
-    hardware_id_map: Arc<HardwareIdMap>,
-    device_to_hwid_map: Arc<DeviceIdToHwIdMap>,
     active_connections: Arc<ActiveConnections>,
     timeout: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(10));
-        
+
         loop {
             interval.tick().await;
-            
+
             // Check for timed out connections
             let now = Instant::now();
             let mut to_remove = Vec::new();
-            
+
             for entry in last_active.iter() {
-                let device_id = entry.key();
+                let hardware_id = entry.key();
                 let last_seen = entry.value();
-                
+
                 if now.duration_since(*last_seen) > timeout {
-                    to_remove.push(device_id.clone());
+                    to_remove.push(hardware_id.clone());
                 }
             }
-            
+
             // Remove timed out connections
-            for device_id in to_remove {
-                debug!("Removing inactive connection for device: {}", device_id);
-                connections.remove(&device_id);
-                last_active.remove(&device_id);
-                
+            for hardware_id in to_remove {
+                debug!("Removing inactive connection for device: {}", hardware_id);
+                connections.remove(&hardware_id);
+                last_active.remove(&hardware_id);
+
                 // Remove from active connections
-                active_connections.remove(&device_id);
-                
-                // Remove hardware ID mapping, but don't remove pairings
-                if let Some(hw_id) = device_to_hwid_map.get(&device_id) {
-                    hardware_id_map.remove(hw_id.value());
-                }
-                device_to_hwid_map.remove(&device_id);
+                active_connections.remove(&hardware_id);
             }
-            
+
             // Process message queues and remove expired messages
             for mut entry in message_queues.iter_mut() {
-                let device_id = entry.key().clone();
+                let hardware_id = entry.key().clone();
                 let queue = entry.value_mut();
-                
+
                 queue.retain(|msg| !msg.is_expired());
-                
+
                 // Try to deliver messages if device is now connected (Message Queueing feature)
-                if let Some(tx) = connections.get(&device_id) {
+                if let Some(tx) = connections.get(&hardware_id) {
                     let mut delivered = Vec::new();
-                    
+
                     for (i, queued) in queue.iter().enumerate() {
                         match tx.send(Message::text(
                             serde_json::to_string(&queued.message).unwrap_or_default(),
                         )) {
                             Ok(_) => {
-                                debug!("Delivered queued message to device: {}", device_id);
+                                debug!("Delivered queued message to device: {}", hardware_id);
                                 delivered.push(i);
                             }
                             Err(e) => {
@@ -254,7 +199,7 @@ fn start_cleanup_task(
                             }
                         }
                     }
-                    
+
                     // Remove delivered messages (in reverse to maintain indices)
                     for i in delivered.into_iter().rev() {
                         if i < queue.len() {
@@ -262,10 +207,10 @@ fn start_cleanup_task(
                         }
                     }
                 }
-                
+
                 // Remove entry if queue is empty
                 if queue.is_empty() {
-                    message_queues.remove(&device_id);
+                    message_queues.remove(&hardware_id);
                 }
             }
         }
@@ -279,20 +224,19 @@ async fn handle_websocket(
     message_queues: Arc<MessageQueues>,
     last_active: Arc<LastActive>,
     bandwidth_tracker: Arc<BandwidthTracker>,
-    hardware_id_map: Arc<HardwareIdMap>,
-    device_to_hwid_map: Arc<DeviceIdToHwIdMap>,
     active_connections: Arc<ActiveConnections>,
 ) {
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     // Generate a temporary connection ID until registration
     let connection_id = Uuid::new_v4().to_string();
-    let mut device_id = connection_id.clone();
-    info!("New WebSocket connection established (conn id: {})", connection_id);
-
-    // Hardware ID will be assigned during registration
     let mut hardware_id = String::new();
-    
+
+    info!(
+        "New WebSocket connection established (conn id: {})",
+        connection_id
+    );
+
     // Set initial last active time
     last_active.insert(connection_id.clone(), Instant::now());
 
@@ -324,19 +268,19 @@ async fn handle_websocket(
                 if let Some(mut entry) = last_active.get_mut(&connection_id) {
                     *entry = Instant::now();
                 }
-                
+
                 // Track bandwidth usage
                 let msg_size = msg.as_bytes().len();
                 if !bandwidth_tracker.add_bytes(msg_size as u64) {
                     error!("Monthly bandwidth limit approaching (9.5TB/10TB). Message rejected.");
-                    let error_msg = WebSocketMessage::Error { 
-                        message: "Server has reached monthly bandwidth limit. Please try again next month.".to_string(),
-                        code: Some(509), // 509 Bandwidth Limit Exceeded
-                    };
-                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                    let _ = send_error(
+                        &tx,
+                        "Server has reached monthly bandwidth limit. Please try again next month.",
+                        509,
+                    );
                     continue;
                 }
-                
+
                 let msg_text = match msg.to_str() {
                     Ok(text) => text,
                     Err(_) => continue, // Not a text message
@@ -347,13 +291,7 @@ async fn handle_websocket(
                     Ok(msg) => msg,
                     Err(e) => {
                         error!("Failed to parse WebSocket message: {}", e);
-                        let error_msg = WebSocketMessage::Error {
-                            message: "Invalid message format".to_string(),
-                            code: Some(400),
-                        };
-                        // log e
-                        error!("Error: {}", e);
-                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                        let _ = send_error(&tx, "Invalid message format", 400);
                         continue;
                     }
                 };
@@ -363,104 +301,88 @@ async fn handle_websocket(
                     WebSocketMessage::Register { hardware_id: hw_id } => {
                         // Store the hardware ID
                         hardware_id = hw_id.clone();
-                        
+
                         // Check if this hardware ID is already registered with another connection
-                        if let Some(existing_device_id) = hardware_id_map.get(&hardware_id) {
+                        if let Some(_existing_conn) = connections.get(&hardware_id) {
                             // If the device is already registered, update the connection
-                            info!("Hardware ID already registered, updating connection for device ID: {}", existing_device_id.value());
-                            
-                            // Update device ID
-                            device_id = existing_device_id.value().clone();
-                            
-                            // Update active connection mapping
-                            active_connections.insert(device_id.clone(), connection_id.clone());
-                            
+                            info!(
+                                "Hardware ID already registered, updating connection: {}",
+                                hardware_id
+                            );
+
+                            // Store connection with hardware ID as key
+                            connections.insert(hardware_id.clone(), tx.clone());
+
                             // Get or create rate limits for this hardware ID
                             if !hardware_rate_limits.contains_key(&hardware_id) {
-                                hardware_rate_limits.insert(hardware_id.clone(), RateLimit::default());
+                                hardware_rate_limits
+                                    .insert(hardware_id.clone(), RateLimit::default());
                             }
-                            
+
                             // Send registration response
                             let response = WebSocketMessage::RegisterResponse {
-                                device_id: device_id.clone(),
+                                hardware_id: hardware_id.clone(),
                             };
-                            let _ = tx.send(Message::text(serde_json::to_string(&response).unwrap()));
-                            
+                            let _ =
+                                tx.send(Message::text(serde_json::to_string(&response).unwrap()));
+
                             // Check for queued messages
-                            if let Some(queue) = message_queues.get(&device_id) {
+                            if let Some(queue) = message_queues.get(&hardware_id) {
                                 if !queue.is_empty() {
-                                    info!("Delivering {} queued messages to {}", queue.len(), device_id);
+                                    info!(
+                                        "Delivering {} queued messages to {}",
+                                        queue.len(),
+                                        hardware_id
+                                    );
                                 }
                             }
                         } else {
-                            // Generate a new permanent device ID
-                            device_id = Uuid::new_v4().to_string();
-                            
-                            // Store hardware ID to device ID mapping
-                            hardware_id_map.insert(hardware_id.clone(), device_id.clone());
-                            device_to_hwid_map.insert(device_id.clone(), hardware_id.clone());
-                            
-                            // Update active connection mapping
-                            active_connections.insert(device_id.clone(), connection_id.clone());
-                            
+                            // Store connection with hardware ID as key
+                            connections.insert(hardware_id.clone(), tx.clone());
+
                             // Initialize rate limits for this hardware ID
                             hardware_rate_limits.insert(hardware_id.clone(), RateLimit::default());
-                            
-                            info!("Device registered with ID: {}, Hardware ID: {}", device_id, hardware_id);
-                            
+
+                            info!("Device registered with Hardware ID: {}", hardware_id);
+
                             // Send registration response
                             let response = WebSocketMessage::RegisterResponse {
-                                device_id: device_id.clone(),
+                                hardware_id: hardware_id.clone(),
                             };
-                            let _ = tx.send(Message::text(serde_json::to_string(&response).unwrap()));
+                            let _ =
+                                tx.send(Message::text(serde_json::to_string(&response).unwrap()));
                         }
-                    },
-                    
-                    WebSocketMessage::Send(mut relay_msg) => {
+                    }
+
+                    WebSocketMessage::Send(relay_msg) => {
                         // Ensure we have a hardware ID
                         if hardware_id.is_empty() {
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Must register with hardware ID first".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            let _ = send_error(&tx, "Must register with hardware ID first", 403);
                             continue;
                         }
-                        
+
                         // Ensure the claimed hardware ID matches the registered one
                         if relay_msg.hardware_id != hardware_id {
-                            warn!("Hardware ID mismatch in message: expected {}, got {}", hardware_id, relay_msg.hardware_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            warn!(
+                                "Hardware ID mismatch in message: expected {}, got {}",
+                                hardware_id, relay_msg.hardware_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
                             continue;
                         }
-                        
-                        // Check message content to determine if it's a pairing or auth-related message
-                        let is_auth_message = match check_auth_exempt_message(&relay_msg.encrypted_data) {
-                            Ok(is_exempt) => is_exempt,
-                            Err(_) => false, // If we can't determine, assume it's not exempt
-                        };
-                        
+
                         // Check if hardware ID has enough points for this message size
                         if let Some(mut rate_limit) = hardware_rate_limits.get_mut(&hardware_id) {
                             match rate_limit.check_and_consume(relay_msg.size_bytes) {
                                 Ok(_) => {
-                                    // Points successfully consumed
                                     debug!(
-                                        "Message {} accepted. Size: {}KB", 
-                                        relay_msg.message_id, 
+                                        "Message {} accepted. Size: {}KB",
+                                        relay_msg.message_id,
                                         (relay_msg.size_bytes / 1024) + 1
                                     );
-                                },
+                                }
                                 Err(limit_message) => {
-                                    let error_msg = WebSocketMessage::Error {
-                                        message: limit_message,
-                                        code: Some(429),
-                                    };
-                                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                                    let _ = send_error(&tx, &limit_message, 429);
                                     continue;
                                 }
                             }
@@ -468,13 +390,12 @@ async fn handle_websocket(
                             // Initialize rate limits if not exists
                             hardware_rate_limits.insert(hardware_id.clone(), RateLimit::default());
                             // Re-attempt consumption
-                            if let Some(mut rate_limit) = hardware_rate_limits.get_mut(&hardware_id) {
-                                if let Err(limit_message) = rate_limit.check_and_consume(relay_msg.size_bytes) {
-                                    let error_msg = WebSocketMessage::Error {
-                                        message: limit_message,
-                                        code: Some(429),
-                                    };
-                                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            if let Some(mut rate_limit) = hardware_rate_limits.get_mut(&hardware_id)
+                            {
+                                if let Err(limit_message) =
+                                    rate_limit.check_and_consume(relay_msg.size_bytes)
+                                {
+                                    let _ = send_error(&tx, &limit_message, 429);
                                     continue;
                                 }
                             }
@@ -482,547 +403,434 @@ async fn handle_websocket(
 
                         // Track outgoing bandwidth for the relay operation
                         if !bandwidth_tracker.add_bytes(relay_msg.size_bytes) {
-                            error!("Monthly bandwidth limit approaching (9.5TB/10TB). Message relay rejected.");
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Server has reached monthly bandwidth limit. Please try again next month.".to_string(),
-                                code: Some(509), // 509 Bandwidth Limit Exceeded
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            error!(
+                                "Monthly bandwidth limit approaching (9.5TB/10TB). Message relay rejected."
+                            );
+                            let _ = send_error(
+                                &tx,
+                                "Server has reached monthly bandwidth limit. Please try again next month.",
+                                509,
+                            );
                             continue;
                         }
-                        
+
                         info!(
                             "Relaying message {} from {} to {}",
                             relay_msg.message_id, relay_msg.sender_id, relay_msg.recipient_id
                         );
-                        
-                        // Make sure sender ID matches the registered device ID
-                        if relay_msg.sender_id != device_id {
-                            warn!("Sender ID mismatch: {} vs {}", relay_msg.sender_id, device_id);
-                            relay_msg.sender_id = device_id.clone();
-                        }
-                        
-                        // Check if recipient is connected by looking up its device ID
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&relay_msg.recipient_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Relay the message to the recipient
-                                let forward_msg = WebSocketMessage::Receive(relay_msg.clone());
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&forward_msg).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        info!("Message {} delivered successfully", relay_msg.message_id);
-                                        // Send acknowledgment to sender
-                                        let ack = WebSocketMessage::Ack {
-                                            message_id: relay_msg.message_id.to_string(),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&ack).unwrap()));
-                                        
-                                        // Update last active time for recipient
-                                        if let Some(mut entry) = last_active.get_mut(&recipient_conn_id) {
-                                            *entry = Instant::now();
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to deliver message: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(
-                                            serde_json::to_string(&error_msg).unwrap(),
-                                        ));
-                                    }
-                                }
-                            } else {
-                                // Recipient not connected, queue message if TTL allows
-                                if relay_msg.ttl > 0 {
-                                    debug!("Queueing message for offline recipient: {}", relay_msg.recipient_id);
-                                    
-                                    let queued_msg = QueuedMessage::new(
-                                        WebSocketMessage::Receive(relay_msg.clone()),
-                                        relay_msg.ttl,
+
+                        // Check if recipient is connected by looking up its hardware ID
+                        if let Some(recipient_tx) = connections.get(&relay_msg.recipient_id) {
+                            // Relay the message to the recipient
+                            let forward_msg = WebSocketMessage::Receive(relay_msg.clone());
+                            match recipient_tx
+                                .send(Message::text(serde_json::to_string(&forward_msg).unwrap()))
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "Message {} delivered successfully",
+                                        relay_msg.message_id
                                     );
-                                    
-                                    message_queues
-                                        .entry(relay_msg.recipient_id.clone())
-                                        .or_insert_with(Vec::new)
-                                        .push(queued_msg);
-                                        
-                                    // Send pending acknowledgment to sender
+                                    // Send acknowledgment to sender
                                     let ack = WebSocketMessage::Ack {
                                         message_id: relay_msg.message_id.to_string(),
                                     };
-                                    let _ = tx.send(Message::text(serde_json::to_string(&ack).unwrap()));
-                                } else {
-                                    // No queuing requested
-                                    let error_msg = WebSocketMessage::Error {
-                                        message: "Recipient not connected".to_string(),
-                                        code: Some(404),
-                                    };
-                                    let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                                    let _ = tx
+                                        .send(Message::text(serde_json::to_string(&ack).unwrap()));
+                                }
+                                Err(e) => {
+                                    error!("Failed to deliver message: {}", e);
+                                    let _ = send_error(&recipient_tx, "Recipient unavailable", 503);
                                 }
                             }
                         } else {
                             // Recipient not connected, queue message if TTL allows
                             if relay_msg.ttl > 0 {
-                                debug!("Queueing message for offline recipient: {}", relay_msg.recipient_id);
-                                
+                                debug!(
+                                    "Queueing message for offline recipient: {}",
+                                    relay_msg.recipient_id
+                                );
+
                                 let queued_msg = QueuedMessage::new(
                                     WebSocketMessage::Receive(relay_msg.clone()),
                                     relay_msg.ttl,
                                 );
-                                
+
                                 message_queues
                                     .entry(relay_msg.recipient_id.clone())
                                     .or_insert_with(Vec::new)
                                     .push(queued_msg);
-                                    
+
                                 // Send pending acknowledgment to sender
                                 let ack = WebSocketMessage::Ack {
                                     message_id: relay_msg.message_id.to_string(),
                                 };
-                                let _ = tx.send(Message::text(serde_json::to_string(&ack).unwrap()));
+                                let _ =
+                                    tx.send(Message::text(serde_json::to_string(&ack).unwrap()));
                             } else {
                                 // No queuing requested
-                                let error_msg = WebSocketMessage::Error {
-                                    message: "Recipient not connected".to_string(),
-                                    code: Some(404),
-                                };
-                                let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                                let _ = send_error(&tx, "Recipient not connected", 404);
                             }
                         }
-                    },
-                    
-                    WebSocketMessage::AuthRequest { 
-                        device_id: sender_id, 
-                        public_key, 
-                        challenge, 
-                        hardware_id: sender_hw_id 
+                    }
+
+                    WebSocketMessage::AuthRequest {
+                        recipient_id,
+                        public_key,
+                        challenge,
+                        hardware_id: sender_hw_id,
                     } => {
                         // Verify hardware ID matches the registered one
                         if sender_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in auth request: expected {}, got {}", hardware_id, sender_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                            continue;
-                        }
-                        
-                        info!("Auth request from {} to {}", device_id, sender_id);
-                        
-                        // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&sender_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward auth request
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::AuthRequest {
-                                        device_id: device_id.clone(),
-                                        public_key,
-                                        challenge,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        debug!("Auth request forwarded to {}", sender_id);
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to forward auth request: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    }
-                                }
-                            }
-                        } else {
-                            // Recipient not connected
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Recipient not connected".to_string(),
-                                code: Some(404),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                        }
-                    },
-                    
-                    WebSocketMessage::AuthResponse { 
-                        device_id: responder_id, 
-                        challenge_response, 
-                        challenge, 
-                        hardware_id: responder_hw_id 
-                    } => {
-                        // Verify hardware ID matches the registered one
-                        if responder_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in auth response: expected {}, got {}", hardware_id, responder_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                            continue;
-                        }
-                        
-                        info!("Auth response from {} to {}", device_id, responder_id);
-                        
-                        // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&responder_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward auth response
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::AuthResponse {
-                                        device_id: device_id.clone(),
-                                        challenge_response,
-                                        challenge,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        debug!("Auth response forwarded to {}", responder_id);
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to forward auth response: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    }
-                                }
-                            }
-                        } else {
-                            // Recipient not connected
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Recipient not connected".to_string(),
-                                code: Some(404),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                        }
-                    },
-                    
-                    WebSocketMessage::AuthVerify { 
-                        device_id: verifier_id, 
-                        challenge_response,
-                        hardware_id: verifier_hw_id 
-                    } => {
-                        // Verify hardware ID matches the registered one
-                        if verifier_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in auth verify: expected {}, got {}", hardware_id, verifier_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                            continue;
-                        }
-                        
-                        info!("Auth verification from {} to {}", device_id, verifier_id);
-                        
-                        // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&verifier_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward auth verification
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::AuthVerify {
-                                        device_id: device_id.clone(),
-                                        challenge_response,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        debug!("Auth verification forwarded to {}", verifier_id);
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to forward auth verification: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    }
-                                }
-                            }
-                        } else {
-                            // Recipient not connected
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Recipient not connected".to_string(),
-                                code: Some(404),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                        }
-                    },
-                    
-                    WebSocketMessage::AuthSuccess { 
-                        device_id: success_id, 
-                        trusted, 
-                        hardware_id: success_hw_id 
-                    } => {
-                        // Verify hardware ID matches the registered one
-                        if success_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in auth success: expected {}, got {}", hardware_id, success_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                            continue;
-                        }
-                        
-                        info!("Auth success from {} to {}, trusted: {}", device_id, success_id, trusted);
-                        
-                        // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&success_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward auth success
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::AuthSuccess {
-                                        device_id: device_id.clone(),
-                                        trusted,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        debug!("Auth success forwarded to {}", success_id);
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to forward auth success: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    }
-                                }
-                            }
-                        } else {
-                            // Recipient not connected
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Recipient not connected".to_string(),
-                                code: Some(404),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                        }
-                    },
-                    
-                    WebSocketMessage::KeyRotationUpdate { 
-                        sender_id, 
-                        recipient_id, 
-                        encrypted_key_package, 
-                        key_id,
-                        hardware_id: sender_hw_id
-                    } => {
-                        // Verify hardware ID matches the registered one
-                        if sender_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in key rotation: expected {}, got {}", hardware_id, sender_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            warn!(
+                                "Hardware ID mismatch in auth request: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
                             continue;
                         }
 
-                        info!("Key rotation update from {} to {}", sender_id, recipient_id);
-                        
+                        info!("Auth request from {} to {}", hardware_id, recipient_id);
+
                         // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&recipient_id) {
-                            conn_id.value().clone()
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward auth request
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::AuthRequest {
+                                    recipient_id: hardware_id.clone(),
+                                    public_key,
+                                    challenge,
+                                    hardware_id: hardware_id.clone(),
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    debug!("Auth request forwarded to {}", recipient_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed to forward auth request: {}", e);
+                                    let _ = send_error(&tx, "Recipient unavailable", 503);
+                                }
+                            }
                         } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward the rotated key
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::KeyRotationUpdate {
-                                        sender_id: sender_id.clone(),
-                                        recipient_id: recipient_id.clone(),
-                                        encrypted_key_package: encrypted_key_package.clone(),
-                                        key_id,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        info!("Key rotation update delivered successfully");
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to deliver key rotation update: {}", e);
-                                        let error_msg = WebSocketMessage::Error {
-                                            message: "Recipient unavailable for key rotation".to_string(),
-                                            code: Some(503),
-                                        };
-                                        let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
-                                    }
+                            // Recipient not connected
+                            let _ = send_error(&tx, "Recipient not connected", 404);
+                        }
+                    }
+
+                    WebSocketMessage::AuthResponse {
+                        recipient_id,
+                        challenge_response,
+                        challenge,
+                        hardware_id: sender_hw_id,
+                    } => {
+                        // Verify hardware ID matches the registered one
+                        if sender_hw_id != hardware_id {
+                            warn!(
+                                "Hardware ID mismatch in auth response: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
+                            continue;
+                        }
+
+                        info!("Auth response from {} to {}", hardware_id, recipient_id);
+
+                        // Find recipient's connection
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward auth response
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::AuthResponse {
+                                    recipient_id: hardware_id.clone(),
+                                    challenge_response,
+                                    challenge,
+                                    hardware_id: hardware_id.clone(),
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    debug!("Auth response forwarded to {}", recipient_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed to forward auth response: {}", e);
+                                    let _ = send_error(&tx, "Recipient unavailable", 503);
+                                }
+                            }
+                        } else {
+                            // Recipient not connected
+                            let _ = send_error(&tx, "Recipient not connected", 404);
+                        }
+                    }
+
+                    WebSocketMessage::AuthVerify {
+                        recipient_id,
+                        challenge_response,
+                        hardware_id: sender_hw_id,
+                    } => {
+                        // Verify hardware ID matches the registered one
+                        if sender_hw_id != hardware_id {
+                            warn!(
+                                "Hardware ID mismatch in auth verify: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
+                            continue;
+                        }
+
+                        info!("Auth verification from {} to {}", hardware_id, recipient_id);
+
+                        // Find recipient's connection
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward auth verification
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::AuthVerify {
+                                    recipient_id: hardware_id.clone(),
+                                    challenge_response,
+                                    hardware_id: hardware_id.clone(),
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    debug!("Auth verification forwarded to {}", recipient_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed to forward auth verification: {}", e);
+                                    let _ = send_error(&tx, "Recipient unavailable", 503);
+                                }
+                            }
+                        } else {
+                            // Recipient not connected
+                            let _ = send_error(&tx, "Recipient not connected", 404);
+                        }
+                    }
+
+                    WebSocketMessage::AuthSuccess {
+                        recipient_id,
+                        trusted,
+                        hardware_id: sender_hw_id,
+                    } => {
+                        // Verify hardware ID matches the registered one
+                        if sender_hw_id != hardware_id {
+                            warn!(
+                                "Hardware ID mismatch in auth success: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
+                            continue;
+                        }
+
+                        info!(
+                            "Auth success from {} to {}, trusted: {}",
+                            hardware_id, recipient_id, trusted
+                        );
+
+                        // Find recipient's connection
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward auth success
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::AuthSuccess {
+                                    recipient_id: hardware_id.clone(),
+                                    trusted,
+                                    hardware_id: hardware_id.clone(),
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    debug!("Auth success forwarded to {}", recipient_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed to forward auth success: {}", e);
+                                    let _ = send_error(&tx, "Recipient unavailable", 503);
+                                }
+                            }
+                        } else {
+                            // Recipient not connected
+                            let _ = send_error(&tx, "Recipient not connected", 404);
+                        }
+                    }
+
+                    WebSocketMessage::KeyRotationUpdate {
+                        hardware_id: sender_hw_id,
+                        recipient_id,
+                        encrypted_key_package,
+                        key_id,
+                    } => {
+                        // Verify hardware ID matches the registered one
+                        if sender_hw_id != hardware_id {
+                            warn!(
+                                "Hardware ID mismatch in key rotation: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
+                            continue;
+                        }
+
+                        info!(
+                            "Key rotation update from {} to {}",
+                            hardware_id, recipient_id
+                        );
+
+                        // Find recipient's connection
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward the rotated key
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::KeyRotationUpdate {
+                                    hardware_id: hardware_id.clone(),
+                                    recipient_id: recipient_id.clone(),
+                                    encrypted_key_package: encrypted_key_package.clone(),
+                                    key_id,
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    info!("Key rotation update delivered successfully");
+                                }
+                                Err(e) => {
+                                    error!("Failed to deliver key rotation update: {}", e);
+                                    let _ = send_error(
+                                        &tx,
+                                        "Recipient unavailable for key rotation",
+                                        503,
+                                    );
                                 }
                             }
                         } else {
                             // Queue key rotation update with high priority, if offline
-                            debug!("Queueing key rotation for offline recipient: {}", recipient_id);
-                            
+                            debug!(
+                                "Queueing key rotation for offline recipient: {}",
+                                recipient_id
+                            );
+
                             let queued_msg = QueuedMessage::new(
                                 WebSocketMessage::KeyRotationUpdate {
-                                    sender_id: sender_id.clone(),
+                                    hardware_id: hardware_id.clone(),
                                     recipient_id: recipient_id.clone(),
                                     encrypted_key_package: encrypted_key_package.clone(),
                                     key_id,
-                                    hardware_id: hardware_id.clone(),
                                 },
                                 300, // 5 minutes TTL for key updates
                             );
-                            
+
                             message_queues
                                 .entry(recipient_id.clone())
                                 .or_insert_with(Vec::new)
                                 .push(queued_msg);
-                            
+
                             // Notify sender that message is queued
-                            let info_msg = WebSocketMessage::Error {
-                                message: "Key rotation queued for offline recipient".to_string(),
-                                code: Some(202), // Accepted but not processed
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&info_msg).unwrap()));
+                            let _ =
+                                send_error(&tx, "Key rotation queued for offline recipient", 202);
                         }
-                    },
-                    
-                    WebSocketMessage::KeyRotationAck { 
-                        sender_id, 
-                        recipient_id, 
-                        key_id, 
+                    }
+
+                    WebSocketMessage::KeyRotationAck {
+                        hardware_id: sender_hw_id,
+                        recipient_id,
+                        key_id,
                         success,
-                        hardware_id: sender_hw_id
                     } => {
                         // Verify hardware ID matches the registered one
                         if sender_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in key rotation ack: expected {}, got {}", hardware_id, sender_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            warn!(
+                                "Hardware ID mismatch in key rotation ack: expected {}, got {}",
+                                hardware_id, sender_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
                             continue;
                         }
-                        
-                        info!("Key rotation acknowledgment from {} to {} for key {}", sender_id, recipient_id, key_id);
-                        
+
+                        info!(
+                            "Key rotation acknowledgment from {} to {} for key {}",
+                            hardware_id, recipient_id, key_id
+                        );
+
                         // Find recipient's connection
-                        let recipient_conn_id = if let Some(conn_id) = active_connections.get(&recipient_id) {
-                            conn_id.value().clone()
-                        } else {
-                            String::new()
-                        };
-                        
-                        if !recipient_conn_id.is_empty() {
-                            if let Some(recipient_tx) = connections.get(&recipient_conn_id) {
-                                // Forward key rotation acknowledgment
-                                match recipient_tx.send(Message::text(
-                                    serde_json::to_string(&WebSocketMessage::KeyRotationAck {
-                                        sender_id: sender_id.clone(),
-                                        recipient_id: recipient_id.clone(),
-                                        key_id,
-                                        success,
-                                        hardware_id: hardware_id.clone(),
-                                    }).unwrap(),
-                                )) {
-                                    Ok(_) => {
-                                        debug!("Key rotation ACK forwarded to {}", recipient_id);
-                                    },
-                                    Err(e) => {
-                                        error!("Failed to forward key rotation ACK: {}", e);
-                                    }
+                        if let Some(recipient_tx) = connections.get(&recipient_id) {
+                            // Forward key rotation acknowledgment
+                            match recipient_tx.send(Message::text(
+                                serde_json::to_string(&WebSocketMessage::KeyRotationAck {
+                                    hardware_id: hardware_id.clone(),
+                                    recipient_id: recipient_id.clone(),
+                                    key_id,
+                                    success,
+                                })
+                                .unwrap(),
+                            )) {
+                                Ok(_) => {
+                                    debug!("Key rotation ACK forwarded to {}", recipient_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed to forward key rotation ACK: {}", e);
+                                    let _ = send_error(
+                                        &tx,
+                                        "Recipient unavailable for key rotation ACK",
+                                        503,
+                                    );
                                 }
                             }
                         } else {
                             // Queue the ACK
-                            debug!("Queueing key rotation ACK for offline recipient: {}", recipient_id);
-                            
+                            debug!(
+                                "Queueing key rotation ACK for offline recipient: {}",
+                                recipient_id
+                            );
+
                             let queued_msg = QueuedMessage::new(
                                 WebSocketMessage::KeyRotationAck {
-                                    sender_id: sender_id.clone(),
+                                    hardware_id: hardware_id.clone(),
                                     recipient_id: recipient_id.clone(),
                                     key_id,
                                     success,
-                                    hardware_id: hardware_id.clone(),
                                 },
                                 300, // 5 minutes TTL
                             );
-                            
+
                             message_queues
                                 .entry(recipient_id.clone())
                                 .or_insert_with(Vec::new)
                                 .push(queued_msg);
+
+                            // Notify sender that message is queued
+                            let _ = send_error(
+                                &tx,
+                                "Key rotation acknowledgement queued for offline recipient",
+                                202,
+                            );
                         }
-                    },
-                    
-                    WebSocketMessage::Status { 
-                        device_id: status_device_id, 
+                    }
+
+                    WebSocketMessage::Status {
+                        hardware_id: status_hw_id,
                         status,
-                        hardware_id: status_hw_id 
                     } => {
                         // Verify hardware ID matches the registered one
                         if status_hw_id != hardware_id {
-                            warn!("Hardware ID mismatch in status update: expected {}, got {}", hardware_id, status_hw_id);
-                            let error_msg = WebSocketMessage::Error {
-                                message: "Hardware ID mismatch".to_string(),
-                                code: Some(403),
-                            };
-                            let _ = tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()));
+                            warn!(
+                                "Hardware ID mismatch in status update: expected {}, got {}",
+                                hardware_id, status_hw_id
+                            );
+                            let _ = send_error(&tx, "Hardware ID mismatch", 403);
                             continue;
                         }
-                        
-                        // Update device status (
-                        if status_device_id == device_id {
-                            debug!("Device {} status changed to {:?}", device_id, status);
-                            
-                            // If going offline, clean up resources
-                            if status == DeviceStatus::Offline {
-                                connections.remove(&connection_id);
-                                last_active.remove(&connection_id);
-                                active_connections.remove(&device_id);
-                                
-                                // Dont remove hardware ID mapping
-                            }
+
+                        debug!("Device {} status changed to {:?}", hardware_id, status);
+
+                        // If going offline, clean up resources
+                        if status == DeviceStatus::Offline {
+                            connections.remove(&connection_id);
+                            last_active.remove(&connection_id);
+                            active_connections.remove(&hardware_id);
+
+                            // Remove hardware ID connection mapping
+                            connections.remove(&hardware_id);
                         }
-                    },
-                    
+                    }
+
                     // Keep the websocket connection alive
                     WebSocketMessage::Ping => {
                         let pong = WebSocketMessage::Pong;
                         let _ = tx.send(Message::text(serde_json::to_string(&pong).unwrap()));
-                    },
-                    
+                    }
+
                     _ => {
                         // Handle other message types as needed
                         debug!("Received unhandled message type: {:?}", ws_message);
@@ -1040,10 +848,27 @@ async fn handle_websocket(
     connections.remove(&connection_id);
     last_active.remove(&connection_id);
 
-    // Remove device from active connections but keep the hardware ID mapping
-    if !device_id.is_empty() {
-        active_connections.remove(&device_id);
+    // Remove device connection but keep rate limits and message queues
+    if !hardware_id.is_empty() {
+        connections.remove(&hardware_id);
+        active_connections.remove(&hardware_id);
     }
-    
-    info!("WebSocket connection closed for device: {}", device_id);
+
+    info!(
+        "WebSocket connection closed for hardware ID: {}",
+        hardware_id
+    );
+}
+
+// Helper function to send error responses
+fn send_error(
+    tx: &mpsc::UnboundedSender<Message>,
+    message: &str,
+    code: u16,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Message>> {
+    let error_msg = WebSocketMessage::Error {
+        message: message.to_string(),
+        code: Some(code),
+    };
+    tx.send(Message::text(serde_json::to_string(&error_msg).unwrap()))
 }

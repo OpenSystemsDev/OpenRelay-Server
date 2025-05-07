@@ -1,13 +1,13 @@
-use serde::{ Deserialize, Serialize };
-use std::time::{ Duration, Instant };
-use std::sync::atomic::{ AtomicU64, Ordering };
-use std::fs::File;
-use std::io::{ Read, Write };
-use std::path::Path;
-use uuid::Uuid;
+use chrono::{Datelike, Utc};
 use dashmap::DashMap;
-use chrono::{ Utc, Datelike };
-use tracing::{ error, info };
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+use tracing::{error, info};
+use uuid::Uuid;
 
 // Store message queues for offline devices
 pub type MessageQueues = DashMap<String, Vec<QueuedMessage>>;
@@ -15,17 +15,11 @@ pub type MessageQueues = DashMap<String, Vec<QueuedMessage>>;
 // Store last activity time for each device
 pub type LastActive = DashMap<String, Instant>;
 
-// Store hardware ID to device ID mappings
-pub type HardwareIdMap = DashMap<String, String>;
-
-// Store device ID to hardware ID mappings (reverse lookup)
-pub type DeviceIdToHwIdMap = DashMap<String, String>;
-
 // Store rate limits by hardware ID
 pub type HardwareRateLimits = DashMap<String, RateLimit>;
 
 // Store active connections by device ID
-pub type ActiveConnections = DashMap<String, String>; // device_id -> connection_id
+pub type ActiveConnections = DashMap<String, String>; // Hardware ID -> connection_id
 
 // Create a struct to track monthly bandwidth usage
 pub struct BandwidthTracker {
@@ -62,12 +56,12 @@ impl BandwidthTracker {
         // Set limits - 10TB and 9.5TB in bytes
         let monthly_limit = 10_000_000_000_000;
         let warning_threshold = 9_500_000_000_000;
-        
+
         // Get current month and year
         let now = Utc::now();
         let month = now.month() as u64;
         let year = now.year() as u64;
-        
+
         // Create initial tracker
         let mut tracker = Self {
             monthly_bytes: AtomicU64::new(0),
@@ -77,44 +71,44 @@ impl BandwidthTracker {
             warning_threshold,
             storage_path: storage_path.to_string(),
         };
-        
+
         // Load saved data if available
         tracker.load_data();
-        
+
         // Check if month has changed and reset if needed
         tracker.check_and_reset_month();
-        
+
         tracker
     }
-    
+
     // Update the bandwidth counter with a new transfer
     pub fn add_bytes(&self, bytes: u64) -> bool {
         // First check if we've exceeded the warning threshold
         if self.monthly_bytes.load(Ordering::Relaxed) >= self.warning_threshold {
             return false; // Reject the transfer
         }
-        
+
         // Add the bytes to the counter
         let new_total = self.monthly_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
-        
+
         // Save data periodically (e.g., every 1GB or so)
         if new_total % 1_000_000_000 < bytes {
             self.save_data();
         }
-        
+
         // Check if we've now exceeded the warning threshold
         new_total < self.warning_threshold
     }
-    
+
     // Check if the month has changed and reset counter if needed
     pub fn check_and_reset_month(&self) {
         let now = Utc::now();
         let current_month = now.month() as u64;
         let current_year = now.year() as u64;
-        
+
         let stored_month = self.current_month.load(Ordering::Relaxed);
         let stored_year = self.current_year.load(Ordering::Relaxed);
-        
+
         // If month or year has changed, reset the counter
         if current_month != stored_month || current_year != stored_year {
             // Store previous month's data for reporting
@@ -123,57 +117,57 @@ impl BandwidthTracker {
                 "Month changed from {}/{} to {}/{}, resetting bandwidth counter. Previous usage: {} bytes",
                 stored_month, stored_year, current_month, current_year, previous_total
             );
-            
+
             // Reset counter and update month/year
             self.monthly_bytes.store(0, Ordering::Relaxed);
             self.current_month.store(current_month, Ordering::Relaxed);
             self.current_year.store(current_year, Ordering::Relaxed);
-            
+
             // Save the updated data
             self.save_data();
         }
     }
-    
+
     // Get current bandwidth usage info
     pub fn get_status(&self) -> (u64, u64, f64) {
         // Check if month needs to be reset
         self.check_and_reset_month();
-        
+
         let bytes = self.monthly_bytes.load(Ordering::Relaxed);
         // Return current bytes, limit, and percentage used
         (
-            bytes, 
+            bytes,
             self.monthly_limit,
-            (bytes as f64 / self.monthly_limit as f64) * 100.0
+            (bytes as f64 / self.monthly_limit as f64) * 100.0,
         )
     }
-    
+
     // Save bandwidth data to disk
     fn save_data(&self) {
         let bytes = self.monthly_bytes.load(Ordering::Relaxed);
         let month = self.current_month.load(Ordering::Relaxed);
         let year = self.current_year.load(Ordering::Relaxed);
-        
+
         let data = format!("{},{},{}", bytes, month, year);
-        
+
         match File::create(&self.storage_path) {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(data.as_bytes()) {
                     error!("Failed to write bandwidth data: {}", e);
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to create bandwidth data file: {}", e);
             }
         }
     }
-    
+
     // Load bandwidth data from disk
     fn load_data(&mut self) {
         if !Path::new(&self.storage_path).exists() {
             return;
         }
-        
+
         match File::open(&self.storage_path) {
             Ok(mut file) => {
                 let mut data = String::new();
@@ -191,7 +185,7 @@ impl BandwidthTracker {
                         }
                     }
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to open bandwidth data file: {}", e);
             }
@@ -203,62 +197,68 @@ impl BandwidthTracker {
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketMessage {
     // Basic communication
-    Register { hardware_id: String },
-    RegisterResponse { device_id: String },
+    Register {
+        hardware_id: String,
+    },
+    RegisterResponse {
+        hardware_id: String,
+    },
     Send(RelayMessage),
     Receive(RelayMessage),
-    Ack { message_id: String },
+    Ack {
+        message_id: String,
+    },
     Ping,
     Pong,
-    Error { message: String, code: Option<u16> },
-    
+    Error {
+        message: String,
+        code: Option<u16>,
+    },
+
     // Authentication with challenge-response
     AuthRequest {
-        device_id: String,
-        public_key: String,      // Base64 encoded public key
-        challenge: String,       // Random challenge for verification
-        hardware_id: String,     // Hardware ID hash
+        recipient_id: String,
+        public_key: String,
+        challenge: String,
+        hardware_id: String,
     },
 
     AuthResponse {
-        device_id: String,
-        challenge_response: String,  // Signed challenge
-        challenge: String,           // New challenge for requester to sign
-        hardware_id: String,         // Hardware ID hash
+        recipient_id: String,
+        challenge_response: String,
+        challenge: String,
+        hardware_id: String,
     },
 
     AuthVerify {
-        device_id: String,
-        challenge_response: String,  // Signed challenge
-        hardware_id: String,         // Hardware ID hash
+        recipient_id: String,
+        challenge_response: String,
+        hardware_id: String,
     },
 
     AuthSuccess {
-        device_id: String,
-        trusted: bool,               // Whether device is trusted
-        hardware_id: String,         // Hardware ID hash of the trusted device
+        recipient_id: String,
+        trusted: bool,
+        hardware_id: String,
     },
 
     KeyRotationUpdate {
-        sender_id: String,
-        recipient_id: String,
-        encrypted_key_package: String,  // Encrypted package containing new keys
-        key_id: u64,                    // ID of the new key for tracking
-        hardware_id: String,            // Hardware ID hash of the sender
+        hardware_id: String,  // Hardware ID of sender
+        recipient_id: String, // Hardware ID of recipient
+        encrypted_key_package: String,
+        key_id: u64,
     },
 
     KeyRotationAck {
-        sender_id: String,
-        recipient_id: String,
-        key_id: u64,                    // ID of the acknowledged key
-        success: bool,                  // Whether it was successful
-        hardware_id: String,            // Hardware ID hash of the sender
+        hardware_id: String,  // Hardware ID of sender
+        recipient_id: String, // Hardware ID of recipient
+        key_id: u64,
+        success: bool,
     },
 
     Status {
-        device_id: String,
+        hardware_id: String,
         status: DeviceStatus,
-        hardware_id: String,            // Hardware ID hash
     },
 }
 
@@ -269,28 +269,28 @@ pub struct RelayMessage {
     pub sender_id: String,
     pub encrypted_data: String,
     pub message_id: Uuid,
-    pub timestamp: u64,              // Unix timestamp of when message was created
-    pub ttl: u64,                    // TTL
-    
+    pub timestamp: u64, // Unix timestamp of when message was created
+    pub ttl: u64,       // TTL
+
     // Authentication
-    pub signature: Option<String>,   // Digital signature of the message
-    pub hardware_id: String,         // Hardware ID hash of the sender
-    
+    pub signature: Option<String>, // Digital signature of the message
+    pub hardware_id: String,       // Hardware ID hash of the sender
+
     // Limit enforcement
-    pub content_type: ContentType,   // Type of content for rate limiting
-    pub size_bytes: u64,             // Size of the encrypted_data in bytes
+    pub content_type: ContentType, // Type of content for rate limiting
+    pub size_bytes: u64,           // Size of the encrypted_data in bytes
 }
 
 // Device identity information
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DeviceIdentity {
     pub device_id: String,
-    pub hardware_id: String,         // Hardware ID hash
+    pub hardware_id: String, // Hardware ID hash
     pub public_key: String,
-    pub name: Option<String>,        // Optional device name
-    pub verified: bool,              // Verified of not
-    pub last_active: u64,            // Unix of last activity
-    pub current_key_id: u64,         // Current encryption key ID
+    pub name: Option<String>, // Optional device name
+    pub verified: bool,       // Verified of not
+    pub last_active: u64,     // Unix of last activity
+    pub current_key_id: u64,  // Current encryption key ID
 }
 
 // Device status for presence information
@@ -312,20 +312,20 @@ pub enum ContentType {
 
 // Rate limiting with combined point-based quota and request limits
 pub struct RateLimit {
-    pub max_points_per_minute: u32,      // Total points available per minute (data volume)
-    pub remaining_points: u32,           // Points remaining in current period
-    pub max_requests_per_minute: u32,    // Maximum requests per minute (request frequency)
-    pub request_counter: u32,            // Requests used in current period
-    pub last_reset: Instant,             // When limits were last reset
+    pub max_points_per_minute: u32, // Total points available per minute (data volume)
+    pub remaining_points: u32,      // Points remaining in current period
+    pub max_requests_per_minute: u32, // Maximum requests per minute
+    pub request_counter: u32,       // Requests used in current period
+    pub last_reset: Instant,        // When limits were last reset
 }
 
 impl Default for RateLimit {
     fn default() -> Self {
         Self {
-            max_points_per_minute: 512,    // 512 points per minute (512KB)
-            remaining_points: 512,         // Start with full points
-            max_requests_per_minute: 60,   // 60 requests per minute (1 per second average)
-            request_counter: 0,            // Start with 0 requests
+            max_points_per_minute: 512,  // 512 points per minute (512KB)
+            remaining_points: 512,       // Start with full points
+            max_requests_per_minute: 60, // 60 requests per minute
+            request_counter: 0,          // Start with 0 requests made
             last_reset: Instant::now(),
         }
     }
@@ -340,50 +340,30 @@ impl RateLimit {
             self.request_counter = 0;
             self.last_reset = Instant::now();
         }
-        
+
         // First check request count limit
         if self.request_counter >= self.max_requests_per_minute {
             return Err(format!(
                 "Request limit exceeded ({}/{}). Try again in a minute.",
-                self.request_counter,
-                self.max_requests_per_minute
+                self.request_counter, self.max_requests_per_minute
             ));
         }
-        
+
         // Then check data points limit
         let kb_size = (size_bytes as f64 / 1024.0).ceil() as u32;
         let points_needed = if kb_size == 0 { 1 } else { kb_size };
-        
+
         if points_needed > self.remaining_points {
             return Err(format!(
                 "Quota exceeded for message size {}KB. {}/{} points remaining. Try again in a minute.",
-                kb_size,
-                self.remaining_points,
-                self.max_points_per_minute
+                kb_size, self.remaining_points, self.max_points_per_minute
             ));
         }
-        
-        // Both limits passed, update counters
+
+        // Limit check passed, update counters
         self.request_counter += 1;
         self.remaining_points -= points_needed;
         Ok(())
-    }
-    
-    // Get current status for debugging/info
-    pub fn get_status(&mut self) -> (u32, u32, u32, u32) {
-        // Refresh if needed
-        if self.last_reset.elapsed() >= Duration::from_secs(60) {
-            self.remaining_points = self.max_points_per_minute;
-            self.request_counter = 0;
-            self.last_reset = Instant::now();
-        }
-        
-        (
-            self.remaining_points, 
-            self.max_points_per_minute,
-            self.request_counter,
-            self.max_requests_per_minute
-        )
     }
 }
 
@@ -402,7 +382,7 @@ impl QueuedMessage {
             ttl: Duration::from_secs(ttl_seconds),
         }
     }
-    
+
     pub fn is_expired(&self) -> bool {
         self.timestamp.elapsed() >= self.ttl
     }

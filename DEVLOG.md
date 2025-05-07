@@ -31,5 +31,15 @@ This log tracks the development progress, major changes, decisions, and bug fixe
 **Time:** 11:32:13 UTC | **Author:** Awe03  
 
 ### Updated Docs, Use a hash of the user's hardware IDs for identification and enforcement of rate limiting, Proper implementation of the pairing system
-* **Decision:** Using a hash of the user's hardware IDs (CPU, Memory, Disk and the Hardware ID) instead of a temporary WebSocket id ensures that the user cannot bypass rate limits by reconnecting, and allows persistent pairing over client restarts.
-* **Updated:** README.md now explains what the user's hardware has is used for, and how it is used.
+*   **Decision:**   Using a hash of the user's hardware IDs (CPU, Memory, Disk and the Hardware ID) instead of a temporary WebSocket id ensures that the user cannot bypass rate limits by reconnecting, and allows persistent pairing over client restarts.
+*   **Updated:**    README.md now explains what the user's hardware has is used for, and how it is used.
+
+## 2025-05-03
+
+**Time:** 15:55:15 UTC | **Author:** Awe03
+
+## Completely shift to a hardware ID approach (No more temporary device IDs), and the server no longer verifies whether the recipient is paired or not.
+*   **Decision:**   We are shifting to a completely Hardware ID based identification approach. Hardware IDs (our client implementation) have a much smaller chance of collision, removes a lot of complexity and the requirement of having two saved maps, and ensures that devices paired, remain paired even if the server restarts or goes offline.
+*   **Decision:**   The server no longer verifies whether the recipient is paired or not. This was originally implemented to prevent unauthorized users from sending messages to random users, but this is not necessary. This task will be completely shifted to the client side. The server will relay messages from a device to another, regardless of whether it is a paired user or not. This further aligns with the zero knowledge architechture, and ensures that the server no longer needs to store what devices are paired with whom (this was a huge privacy risk). Doing so will also reduce memory and compute usage for large number of connections, as multiple mappings between Device IDs and Hardware IDs are not required, and the server no longer adds latency by checking whether theyre paired.
+*   **Decision:**   The server will still verify whether the message sender's claimed identity matches their registered identity (Hardware ID must match their registration). This prevents spoofing attacks, and also messages from being sent to the wrong user. It is encrypted, but the end user might be listening to their network and possibly decrypt. The server is only verifying a client's identity, not its relationship with another client. This still aligns with our zero-knowledge architecture.
+*   **Added:**    The above.
