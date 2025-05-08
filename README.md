@@ -58,12 +58,6 @@ OpenRelay-Server is the backend relay server that allows OpenRelay to sync data 
     *   **Message Time-To-Live (TTL):** Messages queued for offline recipients have a TTL set by the sender. If a message is not delivered before its TTL expires, it is automatically discarded by the server.
     *   **Background Cleanup:** A background service periodically scans and removes expired queued messages, cleans up resources associated with disconnected or timed-out client connections, so the server does not retain any data longer than what you set it for.
 
-## Reponses
-See [RESPONSES.md](/RESPONSES.md)
-
-## Devlog
-See [DEVLOG.md](/DEVLOG.md)
-
 ## Self-hosting
 It is recommended to self-host the server, as it is a free service and I cannot guarantee uptime or availability.
 
@@ -88,6 +82,12 @@ Note: To create a secure wss:// or https:// comnnection to a server outside your
 
 *   **Health Check:** `GET /health` - Returns `OK` if the server is running.
 *   **Bandwidth Status:** `GET /bandwidth-status` - Returns the current monthly bandwidth usage (e.g., `Bandwidth Usage: 0.01 TB / 10.00 TB (0.10%)`).
+
+## Reponses
+See [RESPONSES.md](/RESPONSES.md)
+
+## Devlog
+See [DEVLOG.md](/DEVLOG.md)
 
 ## Contributing
 
