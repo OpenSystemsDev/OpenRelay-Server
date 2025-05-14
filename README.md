@@ -1,9 +1,6 @@
 # OpenRelay-Server
 OpenRelay-Server is the backend relay server that allows OpenRelay to sync data across networks.
 
-# OpenRelay-Server
-OpenRelay-Server is the backend relay server that allows OpenRelay to sync data across networks.
-
 ## Features
 1.  **Zero-knowledge Architecture:** The server is designed to have zero knowledge of any of the data being 
     sent or received.
